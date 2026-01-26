@@ -1,0 +1,122 @@
+IAM Policy for S3
+
+s3-policy.json:
+
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject","s3:GetObject","s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::testdata/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::testdata"
+    }
+  ]
+}
+
+#
+Create Policy
+aws iam create-policy --policy-name s3-app-policy --policy-document file://s3-policy.json
+
+
+{
+    "Policy": {
+        "PolicyName": "s3-app-policy",
+        "PolicyId": "SKXKEUJALLSKFRKK",
+        "Arn": "arn:aws:iam::12345:policy/s3-app-policy",
+        "Path": "/",
+        "DefaultVersionId": "v1",
+        "AttachmentCount": 0,
+        "PermissionsBoundaryUsageCount": 0,
+        "IsAttachable": true,
+        "CreateDate": "2025-12-17T10:34:10+00:00",
+        "UpdateDate": "2025-12-17T10:34:10+00:00"
+    }
+}
+
+
+
+
+
+IAM Role for IRSA
+
+Get OIDC provider URL for your cluster
+
+aws eks describe-cluster \
+  --name test-cluster\
+  --region ap-south-1 \
+  --query "cluster.identity.oidc.issuer" \
+  --output text
+
+https://oidc.eks.ap-south-1.amazonaws.com/id/1234556756FFSSDFGGHGFGHFFHHH
+
+
+
+Check if the OIDC provider exists in IAM
+aws iam list-open-id-connect-providers
+
+arn:aws:iam::12345:oidc-provider/oidc.eks.ap-south-1.amazonaws.com/id/1234556756FFSSDFGGHGFGHFFHHH
+
+Use this full ARN as the Federated principal in trust.json.
+<account-id> comes from this ARN.
+
+
+
+trust.json:
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::12345:oidc-provider/oidc.eks.ap-south-1.amazonaws.com/id/1234556756FFSSDFGGHGFGHFFHHH"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "arn:aws:iam::12345:oidc-provider/oidc.eks.ap-south-1.amazonaws.com/id/1234556756FFSSDFGGHGFGHFFHHH:sub": "system:serviceaccount:s3-app:s3-app-sa"
+        }
+      }
+    }
+  ]
+}
+
+
+aws iam create-role --role-name s3-app-irsa-role --assume-role-policy-document file://trust.json
+
+{
+    "Role": {
+        "Path": "/",
+        "RoleName": "s3-app-irsa-role",
+        "RoleId": "AROARZCM3QNMMJVGNH7AZ",
+        "Arn": "arn:aws:iam::12345:role/s3-app-irsa-role",
+        "CreateDate": "2025-12-17T10:39:28+00:00",
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Federated": "arn:aws:iam::12345:oidc-provider/oidc.eks.ap-south-1.amazonaws.com/id/1234556756FFSSDFGGHGFGHFFHHH"
+                    },
+                    "Action": "sts:AssumeRoleWithWebIdentity",
+                    "Condition": {
+                        "StringEquals": {
+                            "arn:aws:iam::12345:oidc-provider/oidc.eks.ap-south-1.amazonaws.com/id/1234556756FFSSDFGGHGFGHFFHHH:sub": "system:serviceaccount:s3-app:s3-app-sa"
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}
+
+
+
+aws iam attach-role-policy --role-name s3-app-irsa-role --policy-arn arn:aws:iam::12345:policy/s3-app-policy
