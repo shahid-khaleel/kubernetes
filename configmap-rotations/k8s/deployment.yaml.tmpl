@@ -1,0 +1,86 @@
+# Template - do not apply directly.
+# ${CONFIG_CHECKSUM} is substituted by scripts/deploy.sh (envsubst) with a
+# sha256 of the ConfigMap's data, so any config content change produces a
+# new pod template hash and forces a rollout - the same pattern Helm uses
+# for `checksum/config` annotations. See README.md "Consistent rollouts".
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-demo
+  namespace: configmap-rotations
+  labels:
+    app: config-demo
+  annotations:
+    # Stakater Reloader: watches config-demo-config and triggers a rollout
+    # automatically on change, independent of the checksum mechanism below.
+    reloader.stakater.com/auto: "true"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: config-demo
+  template:
+    metadata:
+      labels:
+        app: config-demo
+      annotations:
+        checksum/config: "${CONFIG_CHECKSUM}"
+    spec:
+      containers:
+        - name: config-demo
+          image: config-demo:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            # spring.config.location (not additional-location!) with an
+            # explicit order: additional-location is searched BEFORE the
+            # default classpath location, so the packaged jar's
+            # application.yaml would win over the mounted ConfigMap file.
+            # Listing classpath:/ first and file:/config/ second makes the
+            # mounted file win, since later locations override earlier ones.
+            - name: SPRING_CONFIG_LOCATION
+              value: "optional:classpath:/,optional:file:/config/"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            # Mounted as a full directory (NOT subPath). subPath mounts are
+            # NOT updated by kubelet when the ConfigMap changes - a common
+            # footgun. A full volume mount is what allows the file inside
+            # the pod to actually change without a restart.
+            - name: config-volume
+              mountPath: /config
+          # Spring Boot takes ~10-15s to start in isolation, but noticeably
+          # longer under CPU contention (e.g. several replicas' JVMs cold-
+          # starting on the same node at once). Without a startupProbe, the
+          # liveness probe can fire before the app is up and kill it
+          # mid-boot, causing a crash loop - so give startup a generous
+          # 180s (60 x 3s) budget and let liveness/readiness stay short,
+          # since they only take over once startupProbe has succeeded once.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            failureThreshold: 60
+            periodSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 10
+      volumes:
+        - name: config-volume
+          configMap:
+            name: config-demo-config

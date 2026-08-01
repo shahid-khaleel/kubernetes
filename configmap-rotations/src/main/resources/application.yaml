@@ -1,0 +1,19 @@
+# Packaged default, used only when no ConfigMap volume is mounted
+# (e.g. running the jar locally). In Kubernetes this is overridden by
+# /config/application.yaml, which wins because SPRING_CONFIG_LOCATION lists
+# file:/config/ after classpath:/ (later locations take precedence).
+server:
+  port: 8080
+
+feature:
+  enabled: false
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info
