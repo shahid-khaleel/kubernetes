@@ -195,64 +195,6 @@ kubectl get validatingwebhookconfigurations | grep kyverno
 
 ---
 
-## Stage 4b — Webhook (OPA Gatekeeper), same policy as Kyverno's
-
-### Install (one-time)
-
-```bash
-bash scripts/05-install-opa-gatekeeper.sh
-```
-
-Takes ~1-2 minutes.
-
-### Policy test
-
-```bash
-bash scripts/06-test-opa-policy.sh
-```
-
-**Actual output:**
-
-```
-== Setting up namespace + ConstraintTemplate + Constraint ==
-namespace/opa-demo created
-constrainttemplate.templates.gatekeeper.sh/k8srequiredlabels created
-
-Waiting for Gatekeeper to generate the ConstraintTemplate's CRD...
-customresourcedefinition.apiextensions.k8s.io/k8srequiredlabels.constraints.gatekeeper.sh condition met
-k8srequiredlabels.constraints.gatekeeper.sh/require-team-label-opa created
-
-== Pod WITHOUT the required 'team' label ==
-Error from server (Forbidden): error when creating "manifests/15-pod-missing-label-opa.yaml":
-admission webhook "validation.gatekeeper.sh" denied the request:
-[require-team-label-opa] you must provide labels: {"team"}
-
-== Pod WITH the required 'team' label ==
-pod/has-team-label-opa created
-```
-
-**Pass condition:** `no-team-label-opa` is rejected by
-`admission webhook "validation.gatekeeper.sh"` with
-`you must provide labels: {"team"}`; `has-team-label-opa` is created.
-
-**Compare side by side with Kyverno's result** (Stage 4 above) — same rule,
-same outcome, two different policy engines and two different error message
-formats. Notice the webhook name in the error differs
-(`validate.kyverno.svc-fail` vs `validation.gatekeeper.sh`) — that's your
-signal for which engine actually blocked a given request when both are
-installed cluster-wide.
-
-**Inspect manually:**
-
-```bash
-kubectl get constrainttemplate k8srequiredlabels
-kubectl get k8srequiredlabels require-team-label-opa -o yaml
-kubectl get pods -n opa-demo
-kubectl get validatingwebhookconfigurations | grep gatekeeper
-```
-
----
-
 ## Troubleshooting
 
 **Stage 1 shows pod list instead of 401.**
@@ -283,15 +225,6 @@ Confirm with `kubectl get clusterpolicy require-team-label -o yaml` and check
 Requires Kubernetes 1.24+ (`kubectl create token <serviceaccount>`). Check
 with `kubectl version`; this cluster runs a version that supports it.
 
-**`kubectl wait` on the Gatekeeper CRD fails with `NotFound`.**
-`kubectl wait` requires the resource to already exist — it does not poll for
-creation. Gatekeeper creates the Constraint's backing CRD asynchronously
-after the `ConstraintTemplate` is applied, which can take a couple seconds.
-`scripts/06-test-opa-policy.sh` already polls for the CRD's existence before
-calling `kubectl wait`; if you're doing this manually, add a short retry
-loop around `kubectl get crd k8srequiredlabels.constraints.gatekeeper.sh`
-first.
-
 ---
 
 ## Full run, start to finish
@@ -302,8 +235,6 @@ bash scripts/02-test-authorization.sh
 bash scripts/03-test-admission-controller.sh
 bash scripts/00-install-kyverno.sh
 bash scripts/04-test-webhook-policy.sh
-bash scripts/05-install-opa-gatekeeper.sh
-bash scripts/06-test-opa-policy.sh
 ```
 
 ## Cleanup after testing
@@ -314,9 +245,5 @@ kubectl delete namespace admission-demo
 kubectl delete namespace webhook-demo
 kubectl delete clusterpolicy require-team-label
 kubectl delete -f https://github.com/kyverno/kyverno/releases/latest/download/install.yaml
-kubectl delete namespace opa-demo
-kubectl delete k8srequiredlabels require-team-label-opa
-kubectl delete constrainttemplate k8srequiredlabels
-kubectl delete -f https://raw.githubusercontent.com/open-policy-agent/gatekeeper/master/deploy/gatekeeper.yaml
 rm -rf .generated
 ```

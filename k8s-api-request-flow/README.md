@@ -18,7 +18,7 @@ Authorization (RBAC)
       │
 Admission Controllers
       │
-Webhook (OPA/Kyverno)
+Webhook (Kyverno)
       │
    Allowed?
       │
@@ -82,11 +82,11 @@ no network hop. (This is the key difference from stage 4.)
 (mutating), and (b) a second pod is rejected once a `ResourceQuota` of
 `pods: "1"` is exhausted (validating).
 
-### 4. Webhook (OPA / Kyverno) — custom, cluster-specific policy
+### 4. Webhook (Kyverno) — custom, cluster-specific policy
 
 Dynamic admission webhooks are **not** compiled into the API server — they're
-ordinary pods running in your cluster (Kyverno, OPA Gatekeeper, etc.) that
-the API server calls out to over HTTPS for every matching request, via a
+an ordinary pod running in your cluster (Kyverno, in this project) that the
+API server calls out to over HTTPS for every matching request, via a
 `ValidatingWebhookConfiguration` / `MutatingWebhookConfiguration` you
 register. This is how organizations enforce custom rules ("every pod must
 have an owner label", "no `:latest` image tags", "no privileged
@@ -105,32 +105,6 @@ operationally (a hung webhook can block *all* matching requests cluster-wide).
   with the label sails through and is created — completing the full pipeline
   down to "Pod Created".
 
-### 4b. The same policy, via OPA Gatekeeper instead
-
-Kyverno and OPA Gatekeeper both plug into the exact same slot in the
-pipeline (a `ValidatingWebhookConfiguration`), so the diagram's
-"Webhook (OPA/Kyverno)" really means "pick one" — most clusters only run
-one of the two. This project installs **both**, scoped to different
-namespaces, purely so you can compare how each expresses the identical rule:
-
-| | Kyverno | OPA Gatekeeper |
-|---|---|---|
-| Policy language | YAML (`pattern` matching) | Rego (a real query language) |
-| Object | `ClusterPolicy` | `ConstraintTemplate` (reusable rule) + `Constraint` (a parameterized instance of it) |
-| Learning curve | Low — declarative, reads like the object it validates | Higher — Rego has its own syntax/semantics to learn |
-| Reuse across rules | Copy/adapt YAML per policy | One `ConstraintTemplate` can back many `Constraint` instances with different `parameters` |
-| Namespace here | `webhook-demo` | `opa-demo` |
-
-**Lab:**
-- `scripts/05-install-opa-gatekeeper.sh` installs Gatekeeper (one-time,
-  ~1-2 min).
-- `scripts/06-test-opa-policy.sh` applies a `ConstraintTemplate`
-  (`k8srequiredlabels`, generic — takes a `labels` parameter) and a
-  `Constraint` (`require-team-label-opa`, parameterized with
-  `labels: ["team"]`) scoped to the `opa-demo` namespace, then proves the
-  same blocked/allowed behavior as the Kyverno demo, via a completely
-  different policy engine.
-
 ## Running the labs, in order
 
 ```bash
@@ -139,8 +113,6 @@ bash scripts/02-test-authorization.sh
 bash scripts/03-test-admission-controller.sh
 bash scripts/00-install-kyverno.sh        # one-time, takes a minute or two
 bash scripts/04-test-webhook-policy.sh
-bash scripts/05-install-opa-gatekeeper.sh # one-time, takes a minute or two
-bash scripts/06-test-opa-policy.sh
 ```
 
 ## Files
@@ -158,19 +130,12 @@ manifests/
   09-webhook-demo-namespace.yaml    Namespace for the Kyverno demo
   10-pod-missing-label.yaml         Pod without 'team' label -- blocked by the webhook
   11-pod-with-label.yaml            Pod with 'team' label -- allowed, Pod Created
-  12-opa-demo-namespace.yaml        Namespace for the OPA Gatekeeper demo
-  13-gatekeeper-constrainttemplate.yaml Rego rule: object must carry given labels
-  14-gatekeeper-constraint.yaml     Instance of the rule: Pods in opa-demo need 'team'
-  15-pod-missing-label-opa.yaml     Pod without 'team' label -- blocked by Gatekeeper
-  16-pod-with-label-opa.yaml        Pod with 'team' label -- allowed, Pod Created
 scripts/
   00-install-kyverno.sh             One-time Kyverno install
   01-test-authentication.sh         Stage 1 demo
   02-test-authorization.sh          Stage 2 demo (writes .generated/viewer.kubeconfig)
   03-test-admission-controller.sh   Stage 3 demo
   04-test-webhook-policy.sh         Stage 4 demo (Kyverno)
-  05-install-opa-gatekeeper.sh      One-time OPA Gatekeeper install
-  06-test-opa-policy.sh             Stage 4 demo (OPA Gatekeeper) -- same rule, compare to Kyverno
 ```
 
 `.generated/` is created at runtime by `02-test-authorization.sh` (holds a
@@ -185,10 +150,6 @@ kubectl delete namespace admission-demo
 kubectl delete namespace webhook-demo
 kubectl delete clusterpolicy require-team-label
 kubectl delete -f https://github.com/kyverno/kyverno/releases/latest/download/install.yaml
-kubectl delete namespace opa-demo
-kubectl delete k8srequiredlabels require-team-label-opa
-kubectl delete constrainttemplate k8srequiredlabels
-kubectl delete -f https://raw.githubusercontent.com/open-policy-agent/gatekeeper/master/deploy/gatekeeper.yaml
 rm -rf .generated
 ```
 
@@ -203,8 +164,3 @@ rm -rf .generated
   context -- kubectl merges flag overrides with existing config rather than
   fully replacing it. `scripts/01-test-authentication.sh` uses a raw `curl`
   request instead, to guarantee no local credentials leak into the test.
-- `kubectl wait` requires the target resource to already exist -- it errors
-  immediately with `NotFound` rather than polling for creation. Gatekeeper
-  creates a Constraint's backing CRD asynchronously after you apply its
-  `ConstraintTemplate`, so `scripts/06-test-opa-policy.sh` polls for the
-  CRD's existence in a loop before calling `kubectl wait` on it.
