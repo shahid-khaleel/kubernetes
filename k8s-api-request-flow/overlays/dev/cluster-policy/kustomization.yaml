@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../base/cluster-policy
+nameSuffix: -dev
+patches:
+  - target:
+      kind: ClusterPolicy
+      name: require-team-label
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/match/any/0/resources/namespaces/0
+        value: k8s-flow-dev
+      - op: replace
+        path: /spec/validationFailureAction
+        value: Audit

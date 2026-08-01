@@ -13,7 +13,7 @@ spec:
               kinds:
                 - Pod
               namespaces:
-                - webhook-demo
+                - k8s-flow-demo
       validate:
         message: "Every pod must have a 'team' label so we know who owns it."
         pattern:

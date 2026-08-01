@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# No `namespace:` here, deliberately -- ClusterPolicy is cluster-scoped.
+# Kept in its own kustomization, separate from base/namespaced, because
+# Kustomize's `namespace:` transformer can't tell a CRD is cluster-scoped
+# and will wrongly inject metadata.namespace into it if the two are combined
+# under one kustomization that sets `namespace:`.
+resources:
+  - cluster-policy.yaml

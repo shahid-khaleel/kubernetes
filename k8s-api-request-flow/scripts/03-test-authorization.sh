@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
 # Stage 2: Authorization (RBAC).
-# Creates a ServiceAccount bound to a Role that can only get/list/watch pods,
-# then proves the RBAC boundary by (a) successfully listing pods and
-# (b) being denied when trying to create one.
+# Uses the 'viewer' ServiceAccount deployed by scripts/01-deploy.sh (Role:
+# get/list/watch pods only), mints it a real token, and proves the RBAC
+# boundary: listing pods succeeds, creating one is denied.
+#
+# Usage: bash scripts/03-test-authorization.sh [dev|staging|prod]  (defaults to dev)
+# Requires: scripts/01-deploy.sh <env> already run.
 set -euo pipefail
 
+ENV="${1:-dev}"
+NAMESPACE="k8s-flow-${ENV}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 GEN_DIR="${PROJECT_DIR}/.generated"
-KUBECONFIG_VIEWER="${GEN_DIR}/viewer.kubeconfig"
+KUBECONFIG_VIEWER="${GEN_DIR}/viewer-${ENV}.kubeconfig"
 
 mkdir -p "${GEN_DIR}"
 
-echo "== Applying ServiceAccount + Role + RoleBinding =="
-kubectl apply -f "${PROJECT_DIR}/manifests/01-rbac-viewer-sa.yaml"
-
-echo
-echo "== Minting a short-lived token for the 'viewer' ServiceAccount =="
-TOKEN=$(kubectl create token viewer --namespace default --duration=1h)
+echo "== Minting a short-lived token for 'viewer' in ${NAMESPACE} =="
+TOKEN=$(kubectl create token viewer --namespace "${NAMESPACE}" --duration=1h)
 
 SERVER=$(kubectl config view --minify --flatten -o jsonpath='{.clusters[0].cluster.server}')
 CA_DATA=$(kubectl config view --minify --flatten -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
@@ -39,18 +40,18 @@ contexts:
     context:
       cluster: minikube
       user: viewer
-      namespace: default
+      namespace: ${NAMESPACE}
 current-context: viewer-context
 EOF
 
 echo "Wrote ${KUBECONFIG_VIEWER}"
 echo
-echo "== As 'viewer': GET pods (allowed by the Role) =="
+echo "== As 'viewer': GET pods in ${NAMESPACE} (allowed by the Role) =="
 kubectl --kubeconfig="${KUBECONFIG_VIEWER}" get pods
 
 echo
-echo "== As 'viewer': CREATE a pod (NOT allowed by the Role) =="
-kubectl --kubeconfig="${KUBECONFIG_VIEWER}" apply -f "${PROJECT_DIR}/manifests/02-test-pod.yaml" 2>&1 || true
+echo "== As 'viewer': CREATE a pod in ${NAMESPACE} (NOT allowed by the Role) =="
+kubectl --kubeconfig="${KUBECONFIG_VIEWER}" apply -n "${NAMESPACE}" -f "${PROJECT_DIR}/fixtures/test-pod.yaml" 2>&1 || true
 
 echo
 echo "Expected: pods listed successfully, but the create is rejected with"
