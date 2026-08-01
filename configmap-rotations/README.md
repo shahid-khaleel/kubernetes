@@ -38,21 +38,33 @@ run it by hand; those are given throughout.
 
 ## 0. Prerequisites
 
-- A local cluster: `kind` or `minikube` (anything works; examples assume `kind`).
+- A local cluster: `kind` or `minikube` (this whole walkthrough has been run
+  end-to-end against `minikube`; `kind` works the same way).
 - `kubectl`, `docker`, and (for the scripts) `envsubst` on PATH.
-- Optional: [Stakater Reloader](https://github.com/stakater/Reloader) for the auto-rollout step.
+- Optional: [Stakater Reloader](https://github.com/stakater/Reloader) for the auto-rollout step (installed in step 7).
+
+**Windows / Git Bash note**: Git Bash's MSYS layer rewrites POSIX-looking
+arguments (`/config/...`) into Windows paths before they reach `kubectl` or
+`docker`, which breaks commands like `kubectl exec ... -- cat /config/application.yaml`
+or `docker run -v /host/path:/config`. If a command below fails with a
+Windows-style path in the error message, prefix it with
+`MSYS_NO_PATHCONV=1`, e.g.:
+```bash
+MSYS_NO_PATHCONV=1 kubectl exec -n configmap-rotations deploy/config-demo -- cat /config/application.yaml
+```
 
 ## 1. Build the image and load it into the cluster
 
 ```bash
-./scripts/build-image.sh kind        # or: minikube / none (if pushing to a real registry)
+./scripts/build-image.sh minikube    # or: kind / none (if pushing to a real registry)
 ```
 
 Equivalent by hand:
 
 ```bash
 docker build -t config-demo:latest .
-kind load docker-image config-demo:latest
+minikube image load config-demo:latest
+# kind users: kind load docker-image config-demo:latest
 ```
 
 ## 2. Deploy: Namespace, ConfigMap, Service, Deployment (3 replicas)
@@ -75,7 +87,13 @@ kubectl rollout status deployment/config-demo -n configmap-rotations
 kubectl get pods -n configmap-rotations -o wide
 ```
 
-You should see 3 `Running` pods.
+You should see 3 `Running` pods. On a busy or resource-constrained node,
+Spring Boot's cold start can take well over a minute per pod (several JVMs
+starting at once compete for CPU) — that's why `startupProbe` in
+`k8s/deployment.yaml.tmpl` gives it a 180-second budget before giving up.
+`kubectl rollout status` will just look like it's hanging; `kubectl get
+events -n configmap-rotations --sort-by=.lastTimestamp` will show it's
+actually progressing.
 
 ## 3. Confirm the "before" state
 
@@ -96,6 +114,11 @@ All 3 pods return `false`, matching the ConfigMap.
 Equivalent by hand: edit `data.application.yaml` in `k8s/configmap.yaml`
 (change `enabled: false` to `enabled: true`) and `kubectl apply -f k8s/configmap.yaml`,
 or `kubectl edit configmap config-demo-config -n configmap-rotations` directly.
+
+(`update-configmap.sh`'s `sed` is anchored to exactly 2-space indent so it
+only ever touches the top-level `feature: / enabled:` line — worth knowing
+if you add more `enabled:`-style keys anywhere else in that YAML, since an
+unanchored replace would silently corrupt those too.)
 
 ### What happens immediately — ConfigMap propagation
 
@@ -201,7 +224,10 @@ remember to restart.
 
 ## 7. Stakater Reloader (fully automatic)
 
-The Deployment already carries:
+The Deployment already carries the opt-in annotation, and separately
+references the ConfigMap by name in its volume — either one alone is enough
+for Reloader to know to watch it (see "How Reloader knows what to watch"
+below):
 
 ```yaml
 metadata:
@@ -209,11 +235,22 @@ metadata:
     reloader.stakater.com/auto: "true"
 ```
 
-Install Reloader once per cluster:
+Install Reloader once per cluster (this creates a ServiceAccount, a
+ClusterRole/ClusterRoleBinding with watch/patch access to
+Deployments/StatefulSets/DaemonSets/ConfigMaps/Secrets cluster-wide, and a
+single-replica Deployment — review the manifest if you're on a shared
+cluster):
 
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/stakater/Reloader/master/deployments/kubernetes/reloader.yaml
 # or: helm repo add stakater https://stakater.github.io/stakater-charts && helm install reloader stakater/reloader
+```
+
+The official manifest deploys it into the `default` namespace as
+`deploy/reloader-reloader`. Confirm it's up:
+
+```bash
+kubectl get pods -n default -l app=reloader-reloader
 ```
 
 With Reloader running, repeat step 4 (flip the ConfigMap) and **do nothing
@@ -230,8 +267,31 @@ and triggers the same "patch a restart annotation" rollout that
 ConfigMap change. Check its work:
 
 ```bash
-kubectl logs -n <reloader-namespace> deploy/reloader-reloader -f
+kubectl logs -n default deploy/reloader-reloader -f
 ```
+
+You should see a line like:
+
+```
+level=info msg="Changes detected in 'config-demo-config' of type 'CONFIGMAP' in namespace 'configmap-rotations'; updated 'config-demo' of type 'Deployment' in namespace 'configmap-rotations'"
+```
+
+and `kubectl get pods -n configmap-rotations` will show a brand new
+ReplicaSet rolling out within seconds of the ConfigMap edit, with no manual
+trigger from you at all.
+
+### How Reloader knows what to watch
+
+Reloader doesn't watch every ConfigMap in the cluster — only ones actually
+tied to a workload it can see, via either:
+
+- the `reloader.stakater.com/auto: "true"` annotation on the workload
+  (which then makes it watch whatever that workload references), or
+- a direct reference: `spec.template.spec.volumes[].configMap.name` (our
+  case — see `k8s/deployment.yaml.tmpl`'s `volumes:` block), or a
+  container's `env[].valueFrom.configMapKeyRef` / `envFrom[].configMapRef`
+  (this app doesn't use either of those, since `feature.enabled` only comes
+  in through the mounted file, not an environment variable).
 
 Checksum-annotation and Reloader solve the same problem two ways: the
 checksum method is declarative and controller-free (works in any cluster,
@@ -283,6 +343,39 @@ Ranked by robustness:
    eventually consistent across replicas) rather than a strictly better one
    — not wired into this demo on purpose, so the gap in step 4 stays
    visible.
+
+## Troubleshooting
+
+Issues actually hit while running this demo end-to-end on minikube, in case
+you hit the same ones:
+
+- **Pods crash-loop right after `kubectl apply`, `startupProbe failed:
+  connection refused`.** Spring Boot's cold start is slower than it looks in
+  a quiet local `docker run` — 10-15s in isolation, 30-45s or more when
+  several replicas' JVMs start at once and compete for CPU on the node.
+  Without a generous `startupProbe` (this repo uses 60 x 3s = 180s), the
+  `livenessProbe` can kill the container mid-boot before it ever gets a
+  chance to come up, which looks like a crash loop but is really just an
+  impatient probe. `kubectl logs <pod>` (not `--previous`) will show Spring
+  Boot happily still starting.
+- **A probe check returns `404` instead of failing to connect.** This means
+  the port is open and the app is serving requests, but that specific path
+  isn't mapped — check `kubectl exec <pod> -- wget -qO- http://localhost:8080/actuator/health`
+  and compare its output (specifically the `"groups"` key) against a
+  healthy pod's. If `management.endpoint.health.probes.enabled` ever ends
+  up `false` in the ConfigMap, Spring Boot stops exposing the
+  `/actuator/health/liveness` and `/readiness` sub-paths entirely — which is
+  exactly why this repo's probes target plain `/actuator/health` instead
+  (see the comment above the probes in `k8s/deployment.yaml.tmpl`).
+- **`kubectl exec ... -- cat /config/application.yaml` or `docker run -v
+  /host:/config` fails with a path like `C:/Program Files/Git/config/...`
+  in the error.** That's Git Bash's MSYS path-conversion mangling the
+  argument — see the Windows note in Prerequisites (`MSYS_NO_PATHCONV=1`).
+- **The mounted file only updates for full volume mounts.** If you ever
+  switch `k8s/deployment.yaml.tmpl`'s `volumeMounts` to use `subPath`
+  (e.g. to mount just `application.yaml` instead of the whole `/config`
+  directory), kubelet stops updating that file on ConfigMap changes
+  entirely, silently — no error, it just never refreshes.
 
 ## Cleanup
 
