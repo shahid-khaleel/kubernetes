@@ -14,7 +14,10 @@ if [[ "$VALUE" != "true" && "$VALUE" != "false" ]]; then
   exit 1
 fi
 
-sed -i -E "s/enabled: (true|false)/enabled: ${VALUE}/" k8s/configmap.yaml
+# Anchored to exactly 2-space indent so this only ever matches the
+# top-level `feature: / enabled: <bool>` line, not any other `enabled:`
+# key that might exist elsewhere in the file (e.g. actuator settings).
+sed -i -E "s/^  enabled: (true|false)$/  enabled: ${VALUE}/" k8s/configmap.yaml
 kubectl apply -f k8s/configmap.yaml
 
 cat <<EOF

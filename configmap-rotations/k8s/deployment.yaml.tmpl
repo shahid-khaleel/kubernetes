@@ -64,20 +64,28 @@ spec:
           # mid-boot, causing a crash loop - so give startup a generous
           # 180s (60 x 3s) budget and let liveness/readiness stay short,
           # since they only take over once startupProbe has succeeded once.
+          #
+          # All three probes hit plain /actuator/health rather than the
+          # /health/liveness and /health/readiness sub-paths: this app has
+          # no scenario where "alive" and "ready" actually differ (no DB,
+          # no external dependency to degrade independently), and the
+          # Kubernetes-specific liveness/readiness health groups were
+          # observed to register inconsistently between otherwise-identical
+          # pods on this cluster - not worth depending on for no benefit.
           startupProbe:
             httpGet:
-              path: /actuator/health/liveness
+              path: /actuator/health
               port: 8080
             failureThreshold: 60
             periodSeconds: 3
           readinessProbe:
             httpGet:
-              path: /actuator/health/readiness
+              path: /actuator/health
               port: 8080
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /actuator/health/liveness
+              path: /actuator/health
               port: 8080
             periodSeconds: 10
       volumes:
