@@ -6,7 +6,7 @@ This document describes how to grant an Amazon EKS workload access to an S3 buck
 
 ## 1. S3 IAM Policy
 
-This policy allows basic object operations on the `fipdata` bucket and permission to list the bucket.
+This policy allows basic object operations on the `testdata` bucket and permission to list the bucket.
 
 **s3-policy.json**
 
