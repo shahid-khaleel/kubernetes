@@ -1,0 +1,117 @@
+name: validate
+
+# Lightweight, credential-free static validation across the 5 independent
+# demos in this repo. No real AWS/cluster access is used or required by
+# any job here - everything is schema/syntax/compile-time checking.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# The raw (non-Kustomize) K8s YAML this repo ships, one file list shared by
+# the yamllint and kubeconform jobs below. k8s-api-request-flow/ is
+# deliberately excluded here - it's Kustomize bases/overlays/patches, not
+# directly-appliable manifests, and gets its own kustomize-build job
+# instead (a stronger check for that tree than plain YAML linting).
+#
+# efs-eks/efs-on-eks/test.yaml is also excluded: it's a real-looking
+# reference Deployment left with intentionally blank placeholder fields
+# (see root README "Known issues") - `hostAliases[].ip: null` fails
+# strict schema typing in kubeconform, and its containers list uses a
+# different indent convention than the rest of the file, which trips
+# yamllint's indentation rule. Both are pre-existing traits of that
+# specific reference file, not bugs introduced by this pass, and we don't
+# hand-edit manifests as part of adding CI.
+env:
+  YAML_FIND: >-
+    configmap-rotations/k8s
+    efs-eks/efs-on-eks
+    isra-eks/s3-app
+    mysql-statefulset-replication/manifests
+
+jobs:
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint raw K8s YAML
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find $YAML_FIND -type f \( -name "*.yaml" -o -name "*.yml" \) ! -name "test.yaml" | sort)
+          echo "Linting ${#files[@]} file(s):"
+          printf '  %s\n' "${files[@]}"
+          yamllint -c .yamllint.yml "${files[@]}"
+
+  kubeconform:
+    name: kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -sSL -o kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tar.gz kubeconform
+          chmod +x kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+
+      - name: Validate raw K8s manifests against upstream schemas
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find $YAML_FIND -type f \( -name "*.yaml" -o -name "*.yml" \) ! -name "test.yaml" | sort)
+          echo "Validating ${#files[@]} file(s):"
+          printf '  %s\n' "${files[@]}"
+          kubeconform -summary -verbose "${files[@]}"
+
+  kustomize-build:
+    name: kustomize-build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        overlay: [dev, staging, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      # kubectl ships a recent, non-EOL `kustomize build` implementation
+      # (`kubectl kustomize`), which is enough to catch broken bases,
+      # overlays, or patches - no separate kustomize binary needed.
+      - name: Render k8s-api-request-flow overlay (${{ matrix.overlay }})
+        run: kubectl kustomize k8s-api-request-flow/overlays/${{ matrix.overlay }}
+
+  java-build:
+    name: java-build (configmap-rotations)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: configmap-rotations/pom.xml
+
+      - name: mvn compile
+        working-directory: configmap-rotations
+        run: mvn -B compile
+
+# Not included: a compile job for isra-eks/s3-app/. It's unambiguously
+# Gradle (build.gradle + gradlew), but build.gradle pins Spring Boot to
+# `3.5.9-SNAPSHOT` resolved from repo.spring.io/snapshot rather than a
+# released version on Maven Central - snapshot artifacts are mutable and
+# routinely purged, so a compile step here would be non-reproducible and
+# would fail on its own schedule, independent of the actual source code.
+# Skipped rather than added as a guaranteed-flaky job.

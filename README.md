@@ -1,5 +1,6 @@
 # kubernetes
 
+[![validate](https://github.com/shahid-khaleel/kubernetes/actions/workflows/validate.yml/badge.svg)](https://github.com/shahid-khaleel/kubernetes/actions/workflows/validate.yml)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white)
 ![AWS EKS](https://img.shields.io/badge/AWS-EKS-FF9900?logo=amazonaws&logoColor=white)
 ![Kustomize](https://img.shields.io/badge/Kustomize-base%2Foverlays-informational)
@@ -73,6 +74,32 @@ Each subdirectory lists its own specifics, but across the set you'll generally n
   create IAM policies/roles and (for `efs-eks/`) an existing EFS file
   system and the [aws-efs-csi-driver](https://github.com/kubernetes-sigs/aws-efs-csi-driver) add-on installed on the cluster
 
+## CI
+
+[`.github/workflows/validate.yml`](.github/workflows/validate.yml) runs
+static, credential-free validation on every push/PR to `main` — no real AWS
+account or Kubernetes cluster is touched. It's split into one job per
+concern, covering all five sub-projects:
+
+| Job | What it checks | Scope |
+|---|---|---|
+| `yamllint` | YAML syntax/indentation sanity | Raw manifests in `configmap-rotations/k8s`, `efs-eks/efs-on-eks`, `isra-eks/s3-app`, `mysql-statefulset-replication/manifests` |
+| `kubeconform` | Manifests validate against upstream Kubernetes OpenAPI schemas | Same raw-manifest set as `yamllint` |
+| `kustomize-build` | The Kustomize base/overlay tree actually renders | `k8s-api-request-flow/overlays/{dev,staging,prod}` via `kubectl kustomize` |
+| `java-build` | The Spring Boot app compiles | `configmap-rotations/` via `mvn -B compile` |
+
+`k8s-api-request-flow/` is intentionally validated only by
+`kustomize-build`, not `yamllint`/`kubeconform` — it's Kustomize
+bases/overlays/patches, not directly-appliable manifests, so a build check
+is the meaningful signal there. `efs-eks/efs-on-eks/test.yaml` is excluded
+from `yamllint`/`kubeconform` (see workflow comments): it's the
+intentionally-incomplete reference Deployment called out under "Known
+issues" below, with blank placeholder fields that fail strict schema
+typing. There's no compile job for `isra-eks/s3-app/` — its `build.gradle`
+pins a Spring Boot **SNAPSHOT** version from `repo.spring.io/snapshot`,
+which is non-reproducible in CI (snapshot artifacts get purged), so a
+build step there would be flaky independent of the code itself.
+
 ## Security considerations across this repo
 
 - **`mysql-statefulset-replication/manifests/01-mysql-a-secret.yaml` and
@@ -123,11 +150,14 @@ Each subdirectory lists its own specifics, but across the set you'll generally n
   as a rename/restructure (old `eks-isra` path replaced by `isra-eks/`)
   rather than a loss of content; the IRSA S3 demo itself is intact and
   functional in its current location.
-- **No CI/lint.** There is no `.github/workflows/` in this repo — no YAML
-  lint, no `kubeconform`/`kubeval` manifest validation, no shellcheck on
-  the various `.sh` scripts, no Kustomize build check. Adding a basic
-  `kubectl kustomize --dry-run` / `kustomize build` and `shellcheck` CI job
-  would catch drift before it's discovered by hand.
+- **CI added, but narrow.** `.github/workflows/validate.yml` (see the
+  [CI](#ci) section above) now covers YAML lint, `kubeconform` schema
+  validation, a Kustomize build check, and a Maven compile — but there's
+  still no `shellcheck` on the various `.sh` scripts, and no compile check
+  for `isra-eks/s3-app/` (blocked by its SNAPSHOT dependency, see CI
+  section). Adding `shellcheck` and pinning `isra-eks/s3-app/` to a
+  released Spring Boot version so it can be compiled in CI too are the
+  natural next steps here.
 - **`efs-eks/` and `isra-eks/` have no automation scripts**, unlike the
   other three demos — they're manifest/policy references you apply by hand
   with `kubectl`/`aws` CLI commands from their README, not scripted
