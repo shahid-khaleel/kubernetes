@@ -1,0 +1,129 @@
+// Declarative pipeline: checkout -> Maven build -> unit tests -> SonarQube
+// analysis -> Docker build -> push to Docker Hub -> deploy to Minikube.
+//
+// Requires (see project README "Jenkins configuration" for exact steps):
+//   - Global Tool: a Maven installation named "Maven3"
+//   - Credentials: "dockerhub-creds" (username/password) for Docker Hub
+//   - A configured SonarQube server named "sonarqube" (Manage Jenkins ->
+//     System -> SonarQube servers), plus a webhook back to Jenkins so the
+//     Quality Gate stage doesn't hang.
+//   - The Jenkins pod's docker.sock/kubectl access described in
+//     jenkins/deployment.yaml and jenkins/Dockerfile.
+pipeline {
+    agent any
+
+    tools {
+        maven 'Maven3'
+    }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    environment {
+        APP_DIR         = 'jenkins-sonarqube-cicd/app'
+        K8S_DIR         = 'jenkins-sonarqube-cicd/k8s'
+        DOCKERHUB_REPO  = 'shahid9741/slsa'
+        IMAGE_TAG       = "${DOCKERHUB_REPO}:${env.BUILD_NUMBER}"
+        KUBE_NAMESPACE  = 'cicd-demo'
+        SONARQUBE_ENV   = 'sonarqube'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/shahid-khaleel/kubernetes.git'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                dir(env.APP_DIR) {
+                    sh 'mvn -B -ntp clean compile'
+                }
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                dir(env.APP_DIR) {
+                    sh 'mvn -B -ntp test'
+                }
+            }
+            post {
+                always {
+                    junit "${env.APP_DIR}/target/surefire-reports/*.xml"
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                dir(env.APP_DIR) {
+                    withSonarQubeEnv(env.SONARQUBE_ENV) {
+                        sh 'mvn -B -ntp sonar:sonar'
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                // Requires the SonarQube server to have a webhook pointed at
+                // this Jenkins (http://<jenkins>/sonarqube-webhook/) —
+                // otherwise this just times out instead of reporting the
+                // real gate result.
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir(env.APP_DIR) {
+                    sh "docker build -t ${env.IMAGE_TAG} -t ${env.DOCKERHUB_REPO}:latest ."
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push "$IMAGE_TAG"
+                        docker push "$DOCKERHUB_REPO:latest"
+                        docker logout
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Minikube') {
+            steps {
+                sh """
+                    kubectl apply -f ${env.K8S_DIR}/namespace.yaml
+                    kubectl apply -f ${env.K8S_DIR}/deployment.yaml -n ${env.KUBE_NAMESPACE}
+                    kubectl apply -f ${env.K8S_DIR}/service.yaml -n ${env.KUBE_NAMESPACE}
+                    kubectl set image deployment/cicd-demo cicd-demo=${env.IMAGE_TAG} -n ${env.KUBE_NAMESPACE}
+                    kubectl rollout status deployment/cicd-demo -n ${env.KUBE_NAMESPACE} --timeout=180s
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployed ${env.IMAGE_TAG} to Minikube namespace ${env.KUBE_NAMESPACE}. Run 'minikube service cicd-demo -n ${env.KUBE_NAMESPACE}' to open it."
+        }
+        failure {
+            echo 'Pipeline failed — see the failing stage above for details.'
+        }
+    }
+}

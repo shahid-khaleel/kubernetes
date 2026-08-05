@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cicd-demo
+  namespace: cicd-demo
+  labels:
+    app: cicd-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cicd-demo
+  template:
+    metadata:
+      labels:
+        app: cicd-demo
+    spec:
+      containers:
+        - name: cicd-demo
+          # Jenkins overwrites this tag at deploy time with
+          # `kubectl set image deployment/cicd-demo cicd-demo=shahid9741/slsa:<build-number>`
+          # — see the "Deploy to Minikube" stage in the Jenkinsfile.
+          image: shahid9741/slsa:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 750m
+              memory: 512Mi
+          # Spring Boot's JVM cold start is slow and variable under
+          # constrained CPU (observed 12s with no CPU limit locally, vs.
+          # 73s on a CPU-throttled Minikube node) — a fixed
+          # initialDelaySeconds on the liveness probe alone caused the
+          # container to be killed mid-startup. startupProbe defers
+          # liveness/readiness checks until the app has actually come up,
+          # with its own generous timeout budget (up to 150s here).
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 15

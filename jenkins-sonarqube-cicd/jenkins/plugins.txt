@@ -1,0 +1,8 @@
+git
+workflow-aggregator
+pipeline-stage-view
+docker-workflow
+kubernetes-cli
+sonar
+credentials-binding
+pipeline-utility-steps
