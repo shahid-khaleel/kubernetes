@@ -10,10 +10,11 @@
 A collection of focused, hands-on Kubernetes operational demos — each one
 isolates a single concept (ConfigMap rollout mechanics, EFS-backed shared
 storage, IRSA-based pod identity, the API request lifecycle, StatefulSet
-database replication) and works through it end-to-end with real manifests
-and runnable scripts, not slideware.
+database replication, a full Jenkins/SonarQube CI/CD loop) and works
+through it end-to-end with real manifests and runnable scripts, not
+slideware.
 
-This is **not** a single application. It's five independent sub-projects
+This is **not** a single application. It's six independent sub-projects
 that happen to live in one repository because they share a theme. Each has
 its own README with prerequisites, step-by-step commands, and — where
 relevant — real captured output from an actual run.
@@ -27,6 +28,7 @@ relevant — real captured output from an actual run.
 | [`isra-eks/s3-app/`](isra-eks/s3-app/) | IAM Roles for Service Accounts (IRSA): a Spring Boot app reads/writes S3 using only a ServiceAccount-scoped IAM role — no static AWS keys anywhere | [README](isra-eks/README.md) |
 | [`k8s-api-request-flow/`](k8s-api-request-flow/) | The full `kubectl apply` → API server pipeline (authn → RBAC → admission controllers → Kyverno webhook) as runnable labs, promoted through Kustomize `dev`/`staging`/`prod` overlays with real per-environment enforcement differences | [README](k8s-api-request-flow/README.md) · [TESTING](k8s-api-request-flow/TESTING.md) |
 | [`mysql-statefulset-replication/`](mysql-statefulset-replication/) | Two independent MySQL 8.0 StatefulSets wired into source → replica (GTID) replication; includes a PodDisruptionBudget failure-mode demo (`minAvailable` that can never be satisfied) | [README](mysql-statefulset-replication/README.md) |
+| [`jenkins-sonarqube-cicd/`](jenkins-sonarqube-cicd/) | A full CI/CD loop from scratch: a Spring Boot app built by a Jenkins declarative pipeline, statically analyzed by SonarQube, packaged with Docker, and deployed to Minikube — with Jenkins and SonarQube themselves also running on that same cluster | [README](jenkins-sonarqube-cicd/README.md) |
 
 ## Concept map
 
@@ -41,12 +43,14 @@ flowchart LR
     K8s --> IAM["Pod identity: IRSA<br/>(IAM Roles for SAs)"]
     K8s --> API["API request lifecycle:<br/>AuthN / AuthZ / Admission / Webhooks"]
     K8s --> SS["StatefulSets &<br/>DB replication"]
+    K8s --> CICD["CI/CD: Jenkins,<br/>SonarQube, Docker"]
 
     CM --> CMdemo["configmap-rotations/"]
     ST --> STdemo["efs-eks/efs-on-eks/"]
     IAM --> IAMdemo["isra-eks/s3-app/"]
     API --> APIdemo["k8s-api-request-flow/"]
     SS --> SSdemo["mysql-statefulset-replication/"]
+    CICD --> CICDdemo["jenkins-sonarqube-cicd/"]
 ```
 
 ## Tech stack
@@ -58,35 +62,40 @@ flowchart LR
 - **AWS**: EKS, IAM/IRSA (OIDC federation), EFS + the EFS CSI driver, S3, ECR
 - **Application runtimes**: Spring Boot (Java 17, Maven and Gradle), MySQL 8.0
 - **Containers**: Docker (multi-stage builds)
+- **CI/CD**: Jenkins (declarative pipelines), SonarQube (static analysis), Docker Hub (`jenkins-sonarqube-cicd/`)
 
 ## Prerequisites (general)
 
 Each subdirectory lists its own specifics, but across the set you'll generally need:
 
 - `kubectl`, pointed at a cluster you control (local Minikube/kind for
-  `configmap-rotations/`, `k8s-api-request-flow/`, and
-  `mysql-statefulset-replication/`; a real EKS cluster for `efs-eks/` and
-  `isra-eks/`, since IRSA and the EFS CSI driver depend on EKS-specific
-  OIDC/CSI plumbing that a local cluster doesn't provide)
+  `configmap-rotations/`, `k8s-api-request-flow/`,
+  `mysql-statefulset-replication/`, and `jenkins-sonarqube-cicd/`; a real
+  EKS cluster for `efs-eks/` and `isra-eks/`, since IRSA and the EFS CSI
+  driver depend on EKS-specific OIDC/CSI plumbing that a local cluster
+  doesn't provide)
 - `docker`, for building the image-based demos
 - `bash` (Git Bash or WSL on Windows) — every script is POSIX shell
 - For the AWS demos: an AWS account/CLI configured with permissions to
   create IAM policies/roles and (for `efs-eks/`) an existing EFS file
   system and the [aws-efs-csi-driver](https://github.com/kubernetes-sigs/aws-efs-csi-driver) add-on installed on the cluster
+- For `jenkins-sonarqube-cicd/`: a Docker Hub account with push access, and
+  ~6 CPUs / ~8GB RAM free to run Minikube + Jenkins + SonarQube together
 
 ## CI
 
 [`.github/workflows/validate.yml`](.github/workflows/validate.yml) runs
 static, credential-free validation on every push/PR to `main` — no real AWS
 account or Kubernetes cluster is touched. It's split into one job per
-concern, covering all five sub-projects:
+concern, covering all six sub-projects:
 
 | Job | What it checks | Scope |
 |---|---|---|
-| `yamllint` | YAML syntax/indentation sanity | Raw manifests in `configmap-rotations/k8s`, `efs-eks/efs-on-eks`, `isra-eks/s3-app`, `mysql-statefulset-replication/manifests` |
+| `yamllint` | YAML syntax/indentation sanity | Raw manifests in `configmap-rotations/k8s`, `efs-eks/efs-on-eks`, `isra-eks/s3-app`, `mysql-statefulset-replication/manifests`, `jenkins-sonarqube-cicd/{k8s,jenkins,sonarqube}` |
 | `kubeconform` | Manifests validate against upstream Kubernetes OpenAPI schemas | Same raw-manifest set as `yamllint` |
 | `kustomize-build` | The Kustomize base/overlay tree actually renders | `k8s-api-request-flow/overlays/{dev,staging,prod}` via `kubectl kustomize` |
 | `java-build` | The Spring Boot app compiles | `configmap-rotations/` via `mvn -B compile` |
+| `java-build-cicd-demo` | The Spring Boot app compiles, and its unit tests pass | `jenkins-sonarqube-cicd/app/` via `mvn -B verify` |
 
 `k8s-api-request-flow/` is intentionally validated only by
 `kustomize-build`, not `yamllint`/`kubeconform` — it's Kustomize
@@ -132,6 +141,14 @@ build step there would be flaky independent of the code itself.
   `Secret` — the two AWS-integrated demos (`efs-eks/`, `isra-eks/`) both
   rely on IRSA/IAM roles for authorization instead, which is the
   recommended pattern.
+- **`jenkins-sonarqube-cicd/jenkins/deployment.yaml` mounts the Minikube
+  node's `/var/run/docker.sock` and runs the pod as `root`**, giving that
+  pod root-equivalent access to the node — a deliberate, documented
+  local-demo shortcut (it's how the pipeline builds Docker images without
+  a separate build agent) and explicitly **not** a production pattern; see
+  that demo's own README for the Kaniko/rootless-BuildKit alternative.
+  Similarly, its bundled SonarQube runs on the embedded H2 database, which
+  SonarSource documents as eval/trial-only.
 
 ## Known issues / recommendations
 
@@ -185,6 +202,7 @@ build step there would be flaky independent of the code itself.
 | `mysql-statefulset-replication/` | Complete, documented, scripted end-to-end |
 | `efs-eks/efs-on-eks/` | Reference manifests only — functional but manual (no scripts); README added in this pass |
 | `isra-eks/s3-app/` | Reference implementation + working Spring Boot app — manual setup (no scripts); README added in this pass |
+| `jenkins-sonarqube-cicd/` | App, Dockerfile, K8s manifests, and Jenkins/SonarQube manifests all verified working end-to-end (build, tests, container run, live Minikube deploy); the Jenkins UI setup and a full pipeline run still need to be done by hand — see its own README for exactly what was and wasn't verified |
 
 Possible next steps: add `shellcheck`/manifest-lint CI, script the two AWS
 demos the same way the three cluster-local demos are scripted, and align

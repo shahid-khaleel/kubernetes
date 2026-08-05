@@ -1,6 +1,6 @@
 name: validate
 
-# Lightweight, credential-free static validation across the 5 independent
+# Lightweight, credential-free static validation across the 6 independent
 # demos in this repo. No real AWS/cluster access is used or required by
 # any job here - everything is schema/syntax/compile-time checking.
 on:
@@ -30,6 +30,9 @@ env:
     efs-eks/efs-on-eks
     isra-eks/s3-app
     mysql-statefulset-replication/manifests
+    jenkins-sonarqube-cicd/k8s
+    jenkins-sonarqube-cicd/jenkins
+    jenkins-sonarqube-cicd/sonarqube
 
 jobs:
   yamllint:
@@ -107,6 +110,23 @@ jobs:
       - name: mvn compile
         working-directory: configmap-rotations
         run: mvn -B compile
+
+  java-build-cicd-demo:
+    name: java-build (jenkins-sonarqube-cicd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: jenkins-sonarqube-cicd/app/pom.xml
+
+      - name: mvn verify
+        working-directory: jenkins-sonarqube-cicd/app
+        run: mvn -B verify
 
 # Not included: a compile job for isra-eks/s3-app/. It's unambiguously
 # Gradle (build.gradle + gradlew), but build.gradle pins Spring Boot to

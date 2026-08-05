@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>CI/CD Demo — Jenkins + SonarQube + Docker + Minikube</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div class="card">
+    <h1>CI/CD Demo</h1>
+    <p class="subtitle">Jenkins &rarr; SonarQube &rarr; Docker &rarr; Minikube</p>
+
+    <p class="greeting" th:text="${greeting}">Hello, World!</p>
+
+    <form th:action="@{/greet}" method="post" class="greet-form">
+        <input type="text" name="name" placeholder="Enter your name" autocomplete="off"/>
+        <button type="submit">Greet me</button>
+    </form>
+
+    <dl class="meta">
+        <dt>App version</dt>
+        <dd th:text="${appVersion}">dev</dd>
+        <dt>Page visits (this pod)</dt>
+        <dd th:text="${visitCount}">0</dd>
+    </dl>
+</div>
+</body>
+</html>

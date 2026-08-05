@@ -1,0 +1,87 @@
+body {
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    margin: 0;
+}
+
+.card {
+    background: #1e293b;
+    border-radius: 12px;
+    padding: 2.5rem 3rem;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    max-width: 480px;
+    width: 90%;
+    text-align: center;
+}
+
+h1 {
+    margin: 0 0 0.25rem;
+    font-size: 1.8rem;
+}
+
+.subtitle {
+    color: #94a3b8;
+    margin: 0 0 1.5rem;
+    font-size: 0.95rem;
+}
+
+.greeting {
+    font-size: 1.1rem;
+    background: #0f172a;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.greet-form {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.greet-form input {
+    flex: 1;
+    padding: 0.6rem 0.8rem;
+    border-radius: 6px;
+    border: 1px solid #334155;
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
+.greet-form button {
+    padding: 0.6rem 1.2rem;
+    border-radius: 6px;
+    border: none;
+    background: #38bdf8;
+    color: #0f172a;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.greet-form button:hover {
+    background: #0ea5e9;
+}
+
+.meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 1rem;
+    text-align: left;
+    font-size: 0.9rem;
+    color: #94a3b8;
+    margin: 0;
+}
+
+.meta dt {
+    font-weight: 600;
+    color: #cbd5e1;
+}
+
+.meta dd {
+    margin: 0 0 0.5rem;
+}
